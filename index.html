@@ -907,6 +907,8 @@
       <div class="desc">Invio diretto al foglio "Registro Cantina" — serve connessione internet.</div>
       <div class="pending-count" id="sync-pending">0 da inviare</div>
       <button class="btn-send" id="btn-send" onclick="sendToExcel()">Invia ora</button>
+      <button class="btn-send" id="btn-fetch" onclick="fetchFromSheet()" style="margin-top:8px; background:rgba(244,233,216,.15); color:#f4e9d8; border:1px solid rgba(244,233,216,.4);">📥 Scarica da Google Sheet</button>
+      <div id="last-fetch" style="font-size:11px; opacity:.7; margin-top:8px; text-align:center;"></div>
       <button class="reset-link" onclick="resetSyncStatus()">Reimposta stato sincronizzazione</button>
     </div>
     <p style="color:#6b5444; font-size:14px;">Esporta manuale (oltre alla sincronizzazione):</p>
@@ -1593,6 +1595,7 @@ function init() {
   loadSyncEmail();
   renderList();
   renderStatoFilters();
+  updateLastFetchLabel();
 }
 
 function switchTab(name) {
@@ -2112,6 +2115,106 @@ function resetSyncStatus() {
   if (!confirm('Reimpostare lo stato di sincronizzazione?\nTutte le registrazioni torneranno "da inviare".')) return;
   entries.forEach(e => { e.sent = false; delete e.sentAt; });
   persist(); renderList(); toast('Stato reimpostato');
+}
+
+// ===== SCARICA DA GOOGLE SHEET (sync bidirezionale) =====
+// Fa una GET all'endpoint con ?action=list, riceve tutte le registrazioni
+// presenti nel foglio, e fa il merge per id con quelle locali.
+//   - registrazione NUOVA (solo remota): viene aggiunta a entries
+//   - registrazione GIA' inviata (sent=true) locale: viene sovrascritta col remoto
+//   - registrazione NON inviata (sent=false) locale: viene preservata (e' un draft)
+//   - foto locali vengono sempre preservate (non vengono mai inviate al cloud)
+async function fetchFromSheet() {
+  const btn = document.getElementById('btn-fetch');
+  const originalText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Scarico…'; }
+
+  try {
+    const res = await fetch(REGISTRO_API_URL + '?action=list', { method: 'GET' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'errore lato server');
+
+    const remote = Array.isArray(data.registrazioni) ? data.registrazioni : [];
+
+    // Indice locale per id (id puo' essere number o string, normalizziamo)
+    const localById = new Map();
+    entries.forEach(e => { if (e.id != null) localById.set(String(e.id), e); });
+
+    let added = 0, updated = 0, skipped = 0;
+    for (const re of remote) {
+      const id = re.id != null ? String(re.id) : '';
+      if (!id) continue;
+      const local = localById.get(id);
+      // Normalizzo il payload remoto: era il body inviato in sendToExcel,
+      // quindi ha vinoCodice (non vino), vascheDaScaricare (non vaschePartenza), ecc.
+      // Lo riconverto allo shape interno usato da entries.
+      const normalized = normalizeRemoteEntry(re);
+      if (!local) {
+        entries.push({ ...normalized, sent: true, foto: [] });
+        added++;
+      } else if (local.sent) {
+        // Conservo foto e flag locali
+        const merged = { ...local, ...normalized, foto: local.foto || [], sent: true };
+        const idx = entries.findIndex(e => String(e.id) === id);
+        entries[idx] = merged;
+        updated++;
+      } else {
+        skipped++;
+      }
+    }
+
+    persist();
+    renderList();
+    if (typeof renderStato === 'function') renderStato();
+
+    const now = new Date();
+    localStorage.setItem('cantina-last-fetch', now.toISOString());
+    updateLastFetchLabel();
+
+    let msg = `✅ ${added} nuove · ${updated} aggiornate`;
+    if (skipped) msg += ` · ${skipped} draft conservati`;
+    toast(msg);
+  } catch (err) {
+    console.error('fetchFromSheet error:', err);
+    toast('❌ Scarico fallito: ' + (err.message || err));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalText; }
+  }
+}
+
+// Riconverte il payload "remoto" (cosi' come e' stato inviato in sendToExcel)
+// allo shape interno usato dall'app (vinoCodice → vino, vascheDaScaricare → vaschePartenza, ecc.)
+function normalizeRemoteEntry(re) {
+  return {
+    id: typeof re.id === 'string' ? Number(re.id) || re.id : re.id,
+    data: re.data || '',
+    ora: re.ora || '',
+    opCode: re.codiceOperazione || re.opCode || '',
+    opDesc: re.operazione || re.opDesc || '',
+    opGruppo: re.gruppo || re.opGruppo || '',
+    vaschePartenza: re.vascheDaScaricare || re.vaschePartenza || [],
+    vascheArrivo: re.vascheDaCaricare || re.vascheArrivo || [],
+    prodottiMateriali: re.prodottiMateriali || [],
+    vino: re.vinoCodice || re.vino || '',
+    annata: re.annata || '',
+    codiceOrigine: re.codiceOrigine || '',
+    qta: re.quantitaVinoHl || re.qta || '',
+    operatore: re.operatore || '',
+    note: re.note || '',
+    statoLavorazione: re.statoLavorazione || '',
+    createdAt: re.registratoIl || re.createdAt || ''
+  };
+}
+
+function updateLastFetchLabel() {
+  const el = document.getElementById('last-fetch');
+  if (!el) return;
+  const iso = localStorage.getItem('cantina-last-fetch');
+  if (!iso) { el.textContent = ''; return; }
+  const d = new Date(iso);
+  const fmt = d.toLocaleString('it-IT', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  el.textContent = `Ultima sincronizzazione cloud: ${fmt}`;
 }
 
 
