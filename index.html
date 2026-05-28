@@ -2183,9 +2183,20 @@ async function fetchFromSheet() {
   }
 }
 
-// Riconverte il payload "remoto" (cosi' come e' stato inviato in sendToExcel)
-// allo shape interno usato dall'app (vinoCodice → vino, vascheDaScaricare → vaschePartenza, ecc.)
+// Riconverte il payload "remoto" allo shape interno usato dall'app.
+// Per le registrazioni vecchie (senza rawJson nel foglio) i campi composti
+// (vasche, prodotti) arrivano come STRINGHE: le ri-parso in array.
 function normalizeRemoteEntry(re) {
+  const asArrayOrParseVasche = (v) => {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') return parseVascheString(v);
+    return [];
+  };
+  const asArrayOrParseProdotti = (v) => {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') return parseProdottiString(v);
+    return [];
+  };
   return {
     id: typeof re.id === 'string' ? Number(re.id) || re.id : re.id,
     data: re.data || '',
@@ -2193,9 +2204,9 @@ function normalizeRemoteEntry(re) {
     opCode: re.codiceOperazione || re.opCode || '',
     opDesc: re.operazione || re.opDesc || '',
     opGruppo: re.gruppo || re.opGruppo || '',
-    vaschePartenza: re.vascheDaScaricare || re.vaschePartenza || [],
-    vascheArrivo: re.vascheDaCaricare || re.vascheArrivo || [],
-    prodottiMateriali: re.prodottiMateriali || [],
+    vaschePartenza: asArrayOrParseVasche(re.vascheDaScaricare || re.vaschePartenza),
+    vascheArrivo:   asArrayOrParseVasche(re.vascheDaCaricare || re.vascheArrivo),
+    prodottiMateriali: asArrayOrParseProdotti(re.prodottiMateriali),
     vino: re.vinoCodice || re.vino || '',
     annata: re.annata || '',
     codiceOrigine: re.codiceOrigine || '',
@@ -2205,6 +2216,37 @@ function normalizeRemoteEntry(re) {
     statoLavorazione: re.statoLavorazione || '',
     createdAt: re.registratoIl || re.createdAt || ''
   };
+}
+
+// Parsa "S05: 12.5 hl + S07: 10.00 hl" → [{vasca:'S05', quantita:'12.5'}, ...]
+function parseVascheString(str) {
+  if (!str) return [];
+  const parts = String(str).split(' + ').map(p => p.trim()).filter(Boolean);
+  return parts.map(part => {
+    const m = part.match(/^(\S+):\s*([\d.,]+)\s*hl\s*$/i);
+    if (m) return { vasca: m[1], quantita: m[2].replace(',', '.') };
+    // Senza quantità: solo codice vasca
+    return { vasca: part, quantita: '' };
+  }).filter(x => x.vasca);
+}
+
+// Parsa "Metabisolfito: 5,00 g/hl (125,00 g) + ..." → array di prodotti
+function parseProdottiString(str) {
+  if (!str) return [];
+  const parts = String(str).split(' + ').map(p => p.trim()).filter(Boolean);
+  return parts.map(part => {
+    // Pattern: "Nome: dose unita (totale unitaTotale)"  oppure  "Nome: dose unita"  oppure  "Nome"
+    const m = part.match(/^(.+?)(?::\s*([\d.,]+)\s*(\S+?))?(?:\s*\(\s*([\d.,]+)(?:\s+(\S+?))?\s*\))?\s*$/);
+    if (!m) return { descrizione: part, gruppo: '', unita: '', dose: '', totale: '', unitaTotale: '' };
+    return {
+      descrizione: (m[1] || '').trim(),
+      gruppo: '',
+      dose: m[2] || '',
+      unita: m[3] || '',
+      totale: m[4] || '',
+      unitaTotale: m[5] || ''
+    };
+  }).filter(x => x.descrizione);
 }
 
 function updateLastFetchLabel() {
@@ -3008,7 +3050,7 @@ function exportCSV() {
     e.qta || '', e.operatore || '',
     (e.note || '').replace(/\n/g,' '), (e.foto || []).length
   ]);
-  const csv = '﻿' + [headers, ...rows].map(r =>
+  const csv = '\uFEFF' + [headers, ...rows].map(r =>
     r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')
   ).join('\n');
   downloadFile(csv, `cantina-log-${todayStr()}.csv`, 'text/csv');
