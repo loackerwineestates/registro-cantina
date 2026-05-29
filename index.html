@@ -2114,8 +2114,14 @@ function resetForm() {
   pendingPhotos = [];
   renderPhotoPreview();
   populateStatoSelect(STATI_LAVORAZIONE, '', false);
+  // Forza la pulizia anche se il valore precedente era ancora valido nelle opzioni
+  // (populateStatoSelect lo conserverebbe per evitare di perdere selezioni utente)
+  document.getElementById('f-stato').value = '';
+  document.getElementById('f-stato').disabled = false;
   document.getElementById('field-stato').classList.remove('hidden');
   const hintEl = document.getElementById('stato-mode-hint'); if (hintEl) hintEl.textContent = '';
+  // Reset memoria autofill: dopo Pulisci nulla è più "auto"
+  lastAutofill = { vino: '', annata: '', codiceOrigine: '', statoLavorazione: '' };
   const now = new Date();
   document.getElementById('f-data').value = now.toISOString().split('T')[0];
   document.getElementById('f-ora').value = now.toTimeString().slice(0,5);
