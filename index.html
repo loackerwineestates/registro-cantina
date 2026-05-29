@@ -1589,6 +1589,7 @@ function autofillStatoFromVasca(vascaCode) {
     const next = STATO_PROGRESSIONE[s.statoLavorazione];
     if (next && opts.includes(next)) {
       sel.value = next;
+      if (typeof lastAutofill !== 'undefined') lastAutofill.statoLavorazione = next;
       return;
     }
   }
@@ -1596,6 +1597,7 @@ function autofillStatoFromVasca(vascaCode) {
   // Default: copia lo stato della vasca di partenza se compatibile con le opzioni
   if (opts.includes(s.statoLavorazione)) {
     sel.value = s.statoLavorazione;
+    if (typeof lastAutofill !== 'undefined') lastAutofill.statoLavorazione = s.statoLavorazione;
   }
 }
 
@@ -1817,6 +1819,10 @@ function toggleVasca(codice) {
     }
   } else {
     arr.splice(i, 1);
+    // Se la partenza diventa vuota dopo la rimozione, pulisci i campi auto-compilati
+    if (pickerTarget === 'partenza' && selectedPartenza.length === 0) {
+      clearAutofilledFields();
+    }
   }
   updateModalCount();
   renderVascaList();
@@ -2715,6 +2721,11 @@ function renderStato() {
     </div>`).join('') || '<div class="empty" style="padding:20px;">—</div>';
 }
 
+// Memoria di cosa abbiamo auto-compilato (per poterlo poi togliere se l'utente
+// rimuove la vasca da cui era stato copiato). Se il valore del campo coincide
+// con questa memoria, sappiamo che e' "auto" e non manuale → safe to clear.
+let lastAutofill = { vino: '', annata: '', codiceOrigine: '', statoLavorazione: '' };
+
 function autofillFromVasca(vascaCode) {
   if (!vascaCode) return;
   const { state } = computeCantinaState();
@@ -2724,10 +2735,34 @@ function autofillFromVasca(vascaCode) {
   const fAnno = document.getElementById('f-annata');
   const fCod  = document.getElementById('f-codice');
   const touched = [];
-  if (fVino && !fVino.value && s.vino)              { fVino.value = s.vino;          touched.push('vino'); }
-  if (fAnno && !fAnno.value && s.annata)            { fAnno.value = s.annata;        touched.push('annata'); }
-  if (fCod  && !fCod.value.trim() && s.codiceOrigine){ fCod.value  = s.codiceOrigine; touched.push('codice'); }
+  if (fVino && !fVino.value && s.vino)              { fVino.value = s.vino;          lastAutofill.vino = s.vino;                   touched.push('vino'); }
+  if (fAnno && !fAnno.value && s.annata)            { fAnno.value = s.annata;        lastAutofill.annata = s.annata;               touched.push('annata'); }
+  if (fCod  && !fCod.value.trim() && s.codiceOrigine){ fCod.value  = s.codiceOrigine; lastAutofill.codiceOrigine = s.codiceOrigine; touched.push('codice'); }
   if (touched.length) toast(`✨ Pre-compilato da ${vascaCode}: ${touched.join(', ')}`);
+}
+
+// Pulisce i campi che sono stati riempiti dall'autofill (e che l'utente non ha modificato a mano).
+// Da chiamare quando l'utente svuota completamente la lista vasche di partenza.
+function clearAutofilledFields() {
+  const fVino = document.getElementById('f-vino');
+  const fAnno = document.getElementById('f-annata');
+  const fCod  = document.getElementById('f-codice');
+  const fStato = document.getElementById('f-stato');
+  const cleared = [];
+  if (fVino && lastAutofill.vino && fVino.value === lastAutofill.vino) {
+    fVino.value = ''; cleared.push('vino');
+  }
+  if (fAnno && lastAutofill.annata && fAnno.value === lastAutofill.annata) {
+    fAnno.value = ''; cleared.push('annata');
+  }
+  if (fCod && lastAutofill.codiceOrigine && fCod.value === lastAutofill.codiceOrigine) {
+    fCod.value = ''; cleared.push('codice');
+  }
+  if (fStato && lastAutofill.statoLavorazione && !fStato.disabled && fStato.value === lastAutofill.statoLavorazione) {
+    fStato.value = ''; cleared.push('stato');
+  }
+  lastAutofill = { vino: '', annata: '', codiceOrigine: '', statoLavorazione: '' };
+  if (cleared.length) toast(`🧹 Ripuliti i campi auto: ${cleared.join(', ')}`);
 }
 
 
