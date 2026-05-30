@@ -746,12 +746,6 @@
       <label>Operazione</label>
       <select id="f-op" onchange="onOpChange()">
         <option value="">— Seleziona operazione —</option>
-        <optgroup label="AGGIUNTE">
-          <option value="AGG">Aggiunta</option>
-          <option value="COL">Collaggio (SCHÖNEN)</option>
-          <option value="PSP">Preparazione Spumante</option>
-          <option value="SOV">Solfitazione Vino/Mosto</option>
-        </optgroup>
         <optgroup label="TRAVASI">
           <option value="T2A">Travaso secondario d'affinamento</option>
           <option value="TML">Travaso post FML</option>
@@ -765,6 +759,12 @@
           <option value="SVI">Svinatura rosso</option>
           <option value="TFA">Travaso post FA</option>
           <option value="T1A">Travaso iniziale d'affinamento</option>
+        </optgroup>
+        <optgroup label="AGGIUNTE">
+          <option value="AGG">Aggiunta</option>
+          <option value="COL">Collaggio (SCHÖNEN)</option>
+          <option value="PSP">Preparazione Spumante</option>
+          <option value="SOV">Solfitazione Vino/Mosto</option>
         </optgroup>
         <optgroup label="SCARICHI">
           <option value="SAC">Scarico x Autoconsumo</option>
@@ -911,7 +911,7 @@
     <div id="stato-warnings"></div>
     <div class="stato-summary" id="stato-summary"></div>
     <div class="field">
-      <label>Cerca vasca, vino o colore</label>
+      <label>Cerca vasca, vino, annata, codice origine o colore</label>
       <input type="text" id="stato-search" placeholder="es. S05 - Lagrein - 2025 - rosato" oninput="renderStato()">
     </div>
     <div class="filter-bar" id="stato-stato-bar"></div>
