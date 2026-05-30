@@ -956,7 +956,7 @@
       <button class="modal-close" onclick="closeVascaPicker()">×</button>
     </div>
     <div class="modal-search">
-      <input type="text" id="vasca-search" placeholder="Cerca codice (S01, SB1601, SD…) o tipo">
+      <input type="text" id="vasca-search" placeholder="Cerca codice vasca, vino, annata, codice origine…">
     </div>
     <div class="modal-filters" id="vasca-filters"></div>
     <div class="modal-body" id="vasca-list"></div>
@@ -1730,11 +1730,22 @@ function renderVascaList() {
   const q = document.getElementById('vasca-search').value.trim().toLowerCase();
   let list = VASCHE;
   if (vascaFilter !== 'all') list = list.filter(v => v.ubicazione === vascaFilter);
-  if (q) list = list.filter(v =>
-    v.vasca.toLowerCase().includes(q) ||
-    (v.tipo || '').toLowerCase().includes(q) ||
-    (v.marca || '').toLowerCase().includes(q)
-  );
+  if (q) list = list.filter(v => {
+    // Match su attributi della vasca (codice, tipo, marca)
+    if (v.vasca.toLowerCase().includes(q) ||
+        (v.tipo || '').toLowerCase().includes(q) ||
+        (v.marca || '').toLowerCase().includes(q)) return true;
+    // Match sul contenuto attuale (vino, descrizione, annata, codice origine, colore)
+    const cur = (_pickerStateCache || {})[v.vasca];
+    if (cur) {
+      if ((cur.vino || '').toLowerCase().includes(q)) return true;
+      if ((cur.vinoDescrizione || '').toLowerCase().includes(q)) return true;
+      if (String(cur.annata || '').toLowerCase().includes(q)) return true;
+      if ((cur.codiceOrigine || '').toLowerCase().includes(q)) return true;
+      if ((cur.colore || '').toLowerCase().includes(q)) return true;
+    }
+    return false;
+  });
 
   const el = document.getElementById('vasca-list');
   if (list.length === 0) {
