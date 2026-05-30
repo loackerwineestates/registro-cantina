@@ -1173,6 +1173,13 @@ const STATO_PROGRESSIONE = {
   'Vino feccioso 2°travaso post FA': 'Vino feccioso 3°travaso post FA'
 };
 const OP_PROGRESSIVE = ['TFA', 'T2A'];
+
+// Eccezione per AGGIUNTE: queste operazioni pur non muovendo vino,
+// cambiano comunque lo stato di lavorazione delle vasche di partenza.
+//   PSP (Preparazione Spumante) → Vino in spumantizzazione
+//   COL (Collaggio)             → Vino sotto colla
+// Funziona anche con piu vasche (ogni vasca scelta cambia il proprio stato).
+const OPERAZIONI_CAMBIA_STATO = new Set(['PSP', 'COL']);
 const PRODOTTI_MATERIALI = [{"descrizione": "Acido citrico", "gruppo": "CONSERVANTE", "unita_default": "g/hl"}, {"descrizione": "Acido metatartarico", "gruppo": "CONSERVANTE", "unita_default": "g/hl"}, {"descrizione": "Acido tartarico", "gruppo": "CONSERVANTE", "unita_default": "g/hl"}, {"descrizione": "Metabisolfito di potassio", "gruppo": "CONSERVANTE", "unita_default": "g/hl"}, {"descrizione": "Bentonite", "gruppo": "CHIARIFICANTE", "unita_default": "g/hl"}, {"descrizione": "Cartoni SK700 (1,5-3,5µm) (25 pezzi)", "gruppo": "CARTONI FILTRANTI", "unita_default": "pezzi"}, {"descrizione": "Cartoni SSF (0,7-0,9µm) (25 pezzi)", "gruppo": "CARTONI FILTRANTI", "unita_default": "pezzi"}, {"descrizione": "Cartoni SSS (0,4-0,4µm) (25 pezzi)", "gruppo": "CARTONI FILTRANTI", "unita_default": "pezzi"}];
 const PRODOTTO_GRUPPI = ['AGGIUNTE', 'TRAVASI', 'TRAVASI VENDEMMIA'];
 const TRAVASO_GRUPPI = ['TRAVASI', 'TRAVASI VENDEMMIA'];
@@ -2426,10 +2433,16 @@ function computeCantinaState() {
     const statoLav  = e.statoLavorazione || '';
 
     // AGGIUNTE / OPERAZIONI senza movim. / SCRITTURE:
-    // NESSUNA modifica allo stato cantina. L'operazione viene solo registrata
-    // nello storico e nel Google Sheet. Vino, annata, codice e stato della
-    // vasca non cambiano (anche se l'entry contiene questi campi a scopo di nota).
+    // Di base NESSUNA modifica allo stato cantina — solo registrazione.
+    // ECCEZIONE: PSP e COL cambiano lo stato di lavorazione delle vasche
+    // di partenza (in spumantizzazione / sotto colla), per qualsiasi numero di vasche.
     if (!movePart && !moveArr) {
+      if (OPERAZIONI_CAMBIA_STATO.has(e.opCode) && statoLav) {
+        for (const v of (e.vaschePartenza || [])) {
+          const code = typeof v === 'string' ? v : v.vasca;
+          if (state[code]) state[code].statoLavorazione = statoLav;
+        }
+      }
       continue;
     }
 
