@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Registro Cantina">
+<link rel="manifest" href="manifest.json">
 <title>Registro Cantina</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -1196,6 +1197,7 @@ let pickerTarget = 'partenza';
 let vascaFilter = 'all';
 
 let selectedProdotti = []; // array of {descrizione, gruppo, quantita, unita}
+let editingEntryId = null; // null = nuova entry, altrimenti id dell'entry in modifica
 
 function getWineVolume() {
   const totA = selectedArrivo.reduce((s, p) => s + parseHl(p.quantita), 0);
@@ -1627,6 +1629,14 @@ function init() {
   renderList();
   renderStatoFilters();
   updateLastFetchLabel();
+  // Registrazione service worker per uso offline
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js')
+        .then(reg => console.log('SW registrato:', reg.scope))
+        .catch(err => console.warn('SW non registrato:', err));
+    });
+  }
 }
 
 function switchTab(name) {
@@ -2086,9 +2096,21 @@ function saveEntry() {
     }
   }
 
+  // Warnings non bloccanti: chiediamo conferma all utente prima di salvare
+  // (vasche di partenza vuote, scarico eccessivo, mischio vini su arrivo)
+  const warnings = checkEntryWarnings(op.gruppo, selectedPartenza, selectedArrivo, document.getElementById('f-vino').value.trim(), document.getElementById('f-annata').value.trim());
+  if (warnings.length > 0) {
+    const msg = `⚠️ Attenzione, questa operazione presenta:\n\n${warnings.join('\n')}\n\nSalvare comunque?`;
+    if (!confirm(msg)) return;
+  }
+
   const isProdottoGruppo = PRODOTTO_GRUPPI.includes(op.gruppo);
+  const isEditing = editingEntryId != null;
+  const existingEntry = isEditing ? entries.find(e => e.id === editingEntryId) : null;
+
   const entry = {
-    id: Date.now(),
+    // In modifica conserviamo id e createdAt originali
+    id: isEditing ? editingEntryId : Date.now(),
     opCode,
     opDesc: op.descrizione,
     opGruppo: op.gruppo,
@@ -2106,17 +2128,36 @@ function saveEntry() {
     note: document.getElementById('f-note').value.trim(),
     foto: [...pendingPhotos],
     statoLavorazione: statoLavorazione,
-    createdAt: new Date().toISOString(),
+    createdAt: existingEntry ? (existingEntry.createdAt || new Date().toISOString()) : new Date().toISOString(),
+    editedAt: isEditing ? new Date().toISOString() : undefined,
+    // Dopo l'edit deve essere ri-inviata, quindi sent=false
     sent: false
   };
-  entries.unshift(entry);
+
+  if (isEditing) {
+    // Sostituisce in place mantenendo la posizione nello storico
+    const idx = entries.findIndex(e => e.id === editingEntryId);
+    if (idx >= 0) entries[idx] = entry;
+    else entries.unshift(entry);
+    // Se la vecchia era sincronizzata, cancella la riga corrispondente sul Sheet
+    if (existingEntry && existingEntry.sent) {
+      deleteFromSheet(editingEntryId);
+    }
+    editingEntryId = null;
+    hideEditBanner();
+    toast('✅ Modifica salvata — ricordati di re-inviare');
+  } else {
+    entries.unshift(entry);
+    toast('✅ Registrato!');
+  }
   persist();
-  toast('✅ Registrato!');
   resetForm();
   setTimeout(() => switchTab('list'), 600);
 }
 
 function resetForm() {
+  editingEntryId = null;
+  if (typeof hideEditBanner === 'function') hideEditBanner();
   document.getElementById('f-op').value = '';
   selectedPartenza = [];
   selectedArrivo = [];
@@ -2414,6 +2455,48 @@ function formatDateShort(d) {
   if (!d) return '';
   const parts = d.split('-');
   return parts.length === 3 ? `${parts[2]}/${parts[1]}` : d;
+}
+
+// Restituisce array di stringhe-warning per l'entry che si sta per salvare.
+// Usato in saveEntry per chiedere conferma prima di persistere.
+function checkEntryWarnings(opGruppo, vaschePartenza, vascheArrivo, vino, annata) {
+  const warnings = [];
+  const isTravaso = TRAVASO_GRUPPI.includes(opGruppo);
+  const isScarico = opGruppo === 'SCARICHI';
+  const isCarico  = opGruppo === 'CARICHI';
+  const movePart  = isTravaso || isScarico;
+  const moveArr   = isTravaso || isCarico;
+  if (!movePart && !moveArr) return warnings;
+
+  const { state } = computeCantinaState();
+
+  // Vasche di partenza: vuote / scarico eccessivo
+  if (movePart && !isCarico) {
+    for (const v of (vaschePartenza || [])) {
+      const cur = state[v.vasca];
+      const q = parseHl(v.quantita);
+      if (!cur || cur.quantita <= 0.001) {
+        warnings.push(`• ${v.vasca}: la vasca risulta VUOTA, ma stai facendo un'operazione di scarico`);
+      } else if (q > cur.quantita + 0.01) {
+        warnings.push(`• ${v.vasca}: scarico ${formatHl(q)} hl ma la vasca ne contiene solo ${formatHl(cur.quantita)} hl`);
+      }
+    }
+  }
+
+  // Vasche di arrivo: mischio di vini diversi
+  if (moveArr) {
+    const targetVasche = isCarico ? (vaschePartenza || []) : (vascheArrivo || []);
+    for (const v of targetVasche) {
+      const cur = state[v.vasca];
+      if (cur && cur.vino && vino && cur.vino !== vino) {
+        const curLabel = `${cur.vino}${cur.annata ? ' ' + cur.annata : ''}`;
+        const newLabel = `${vino}${annata ? ' ' + annata : ''}`;
+        warnings.push(`• ${v.vasca}: già contiene ${curLabel}, stai caricando ${newLabel} (mischio)`);
+      }
+    }
+  }
+
+  return warnings;
 }
 
 function computeCantinaState() {
@@ -3181,7 +3264,8 @@ function renderList() {
       ${e.note ? `<div class="entry-notes">"${escapeHtml(e.note)}"</div>` : ''}
       ${e.foto && e.foto.length ? `<div class="entry-photos">${e.foto.map(p => `<img src="${p}" onclick="viewPhoto('${p}')">`).join('')}</div>` : ''}
       <div class="entry-actions">
-        <button class="delete" onclick="deleteEntry(${e.id})">Elimina</button>
+        <button onclick="startEditEntry(${e.id})">✏️ Modifica</button>
+        <button class="delete" onclick="deleteEntry(${e.id})">🗑️ Elimina</button>
       </div>
     </div>
   `;
@@ -3222,122 +3306,23 @@ async function deleteFromSheet(id) {
     toast(`⚠️ Cancellata in locale ma NON dal Sheet: ${err.message || err}`);
   }
 }
-function viewPhoto(src) {
-  const w = window.open('', '_blank');
-  w.document.write(`<body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh;"><img src="${src}" style="max-width:100%;max-height:100%;"></body>`);
-}
-
-// ===== EXPORT =====
-function exportCSV() {
-  if (entries.length === 0) { toast('Niente da esportare'); return; }
-  const headers = ['Data','Ora','Cod. Op','Operazione','Gruppo','Vasche da scaricare','Vasche da caricare','Vino (codice)','Linea prodotto','Annata','Codice origine','Prodotti e materiali','Quantità totale (hl)','Operatore','Note','Num. foto'];
-  const formatVasche = (arr) => (arr || []).map(item => {
-    if (typeof item === 'string') return item;
-    return item.quantita ? `${item.vasca}: ${item.quantita} hl` : item.vasca;
-  }).join(' + ');
-  const rows = entries.map(e => [
-    e.data, e.ora || '', e.opCode, e.opDesc, e.opGruppo,
-    formatVasche(e.vaschePartenza),
-    formatVasche(e.vascheArrivo),
-    e.vino || '',
-    (() => { const l = LINEE_PRODOTTI.find(x => x.codice === e.vino); return l ? l.descrizione : (e.prodotto || ''); })(),
-    e.annata || '',
-    e.codiceOrigine || '',
-    (e.prodottiMateriali || []).map(p => {
-      if (p.dose && p.totale) return `${p.descrizione}: ${p.dose} ${p.unita} (${p.totale} ${totalUnit(p.unita)})`;
-      if (p.totale) return `${p.descrizione}: ${p.totale} ${p.unita.replace('/hl','')}`;
-      if (p.dose) return `${p.descrizione}: ${p.dose} ${p.unita}`;
-      if (p.quantita) return `${p.descrizione}: ${p.quantita} ${p.unita || ''}`;
-      return p.descrizione;
-    }).join(' + '),
-    e.qta || '', e.operatore || '',
-    (e.note || '').replace(/\n/g,' '), (e.foto || []).length
-  ]);
-  const csv = '\uFEFF' + [headers, ...rows].map(r =>
-    r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')
-  ).join('\n');
-  downloadFile(csv, `cantina-log-${todayStr()}.csv`, 'text/csv');
-  toast('📊 CSV scaricato');
-}
-function exportJSON() {
-  const json = JSON.stringify({ exported: new Date().toISOString(), entries }, null, 2);
-  downloadFile(json, `cantina-backup-${todayStr()}.json`, 'application/json');
-  toast('💾 Backup scaricato');
-}
-function importJSON() { document.getElementById('import-file').click(); }
-function handleImport(e) {
-  const file = e.target.files[0]; if (!file) return;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    try {
-      const data = JSON.parse(ev.target.result);
-      if (!data.entries || !Array.isArray(data.entries)) throw 0;
-      if (!confirm(`Importare ${data.entries.length} registrazioni?`)) return;
-      entries = [...data.entries, ...entries];
-      persist(); renderList(); toast('✅ Importato');
-    } catch (err) { toast('⚠️ File non valido'); }
-  };
-  reader.readAsText(file);
-  e.target.value = '';
-}
-function clearAll() {
-  if (!confirm('Eliminare TUTTE le registrazioni?')) return;
-  if (!confirm('Sei sicuro? Fai prima un backup!')) return;
-  entries = []; persist(); renderList(); toast('Tutto cancellato');
-}
-function downloadFile(content, filename, mime) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 100);
-}
-
-// ===== UTILS =====
-function parseHl(s) {
-  if (s === null || s === undefined) return 0;
-  const str = String(s).trim().replace(',', '.');
-  if (!str) return 0;
-  const n = parseFloat(str);
-  return isNaN(n) ? 0 : n;
-}
-function formatHl(n) {
-  if (n === null || n === undefined || isNaN(n)) return '';
-  return Number(n).toFixed(2).replace('.', ',');
-}
-
-function normalizeQta(input) {
-  let val = (input.value || '').trim();
-  if (!val) { input.value = ''; return ''; }
-  val = val.replace('.', ',');
-  const m = val.match(/^(\d+)(?:,(\d*))?$/);
-  if (!m) {
-    toast('⚠️ Quantità: usa solo cifre e virgola (es. 25,00)');
-    return null;
-  }
-  let decPart = m[2] || '';
-  if (decPart.length > 4) {
-    toast('⚠️ Massimo 4 cifre dopo la virgola');
-    return null;
-  }
-  if (decPart.length < 2) decPart = decPart.padEnd(2, '0');
-  const normalized = m[1] + ',' + decPart;
-  input.value = normalized;
-  return normalized;
-}
-
-function formatDate(d) { if (!d) return ''; const [y,m,day] = d.split('-'); return `${day}/${m}/${y.slice(2)}`; }
-function todayStr() { return new Date().toISOString().split('T')[0]; }
-function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function escapeAttr(s) { return String(s).replace(/'/g, "\\'"); }
-function toast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2000);
-}
-
-init();
-</script>
-
-</body>
-</html>
+// Carica una entry esistente nel form Nuovo per modifica
+function startEditEntry(id) {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) { toast('Registrazione non trovata'); return; }
+  editingEntryId = id;
+  // Compila operazione + ricalcola UI condizionale
+  const fOp = document.getElementById('f-op');
+  fOp.value = entry.opCode || '';
+  if (typeof onOpChange === 'function') onOpChange();
+  // Vasche
+  selectedPartenza = (entry.vaschePartenza || []).map(v => typeof v === 'string' ? { vasca: v, quantita: '' } : { vasca: v.vasca, quantita: v.quantita || '' });
+  selectedArrivo   = (entry.vascheArrivo   || []).map(v => typeof v === 'string' ? { vasca: v, quantita: '' } : { vasca: v.vasca, quantita: v.quantita || '' });
+  renderChips('partenza');
+  renderChips('arrivo');
+  // Prodotti
+  selectedProdotti = (entry.prodottiMateriali || []).map(p => ({ ...p }));
+  if (typeof renderProdottoChips === 'function') renderProdottoChips();
+  // Vino/annata/codice/stato
+  document.getElementById('f-vino').value = entry.vino || '';
+  document.getElementById('f-annata').value = entr
