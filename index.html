@@ -2425,15 +2425,11 @@ function computeCantinaState() {
     const moveArr   = isTravaso || isCarico;
     const statoLav  = e.statoLavorazione || '';
 
-    // Per AGGIUNTE / OPERAZIONI senza movim. / SCRITTURE: il vino non si muove
-    // ma se l'entry ha uno stato lavorazione lo applichiamo alle vasche di partenza.
+    // AGGIUNTE / OPERAZIONI senza movim. / SCRITTURE:
+    // NESSUNA modifica allo stato cantina. L'operazione viene solo registrata
+    // nello storico e nel Google Sheet. Vino, annata, codice e stato della
+    // vasca non cambiano (anche se l'entry contiene questi campi a scopo di nota).
     if (!movePart && !moveArr) {
-      if (statoLav && !isScarico) {
-        for (const v of (e.vaschePartenza || [])) {
-          const code = typeof v === 'string' ? v : v.vasca;
-          if (state[code]) state[code].statoLavorazione = statoLav;
-        }
-      }
       continue;
     }
 
@@ -3177,8 +3173,37 @@ function renderList() {
 function setFilter(t) { currentFilter = t; renderList(); }
 function deleteEntry(id) {
   if (!confirm('Eliminare questa registrazione?')) return;
+  const entry = entries.find(e => e.id === id);
+  const wasSent = !!(entry && entry.sent);
   entries = entries.filter(e => e.id !== id);
-  persist(); renderList(); toast('Eliminato');
+  persist();
+  renderList();
+  if (typeof renderStato === 'function') renderStato();
+  if (wasSent) {
+    toast('Eliminato — sincronizzo cancellazione sul Sheet…');
+    deleteFromSheet(id);
+  } else {
+    toast('Eliminato');
+  }
+}
+
+// Propaga la cancellazione al Google Sheet via Apps Script (best effort)
+async function deleteFromSheet(id) {
+  try {
+    const res = await fetch(REGISTRO_API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: 'delete', id: id }),
+      redirect: 'follow'
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'errore lato server');
+    if (data.deleted > 0) toast(`🗑️ Cancellata anche dal Sheet (${data.deleted} riga${data.deleted === 1 ? '' : 'he'})`);
+    else toast('⚠️ Sheet: nessuna riga con quell id trovata');
+  } catch (err) {
+    console.error('deleteFromSheet error:', err);
+    toast(`⚠️ Cancellata in locale ma NON dal Sheet: ${err.message || err}`);
+  }
 }
 function viewPhoto(src) {
   const w = window.open('', '_blank');
