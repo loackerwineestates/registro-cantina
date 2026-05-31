@@ -3325,4 +3325,173 @@ function startEditEntry(id) {
   if (typeof renderProdottoChips === 'function') renderProdottoChips();
   // Vino/annata/codice/stato
   document.getElementById('f-vino').value = entry.vino || '';
-  document.getElementById('f-annata').value = entr
+  document.getElementById('f-annata').value = entry.annata || '';
+  document.getElementById('f-codice').value = entry.codiceOrigine || '';
+  if (entry.statoLavorazione) {
+    const stato = document.getElementById('f-stato');
+    if (stato) {
+      const opts = [...stato.options].map(o => o.value);
+      if (!opts.includes(entry.statoLavorazione)) {
+        const opt = document.createElement('option');
+        opt.value = entry.statoLavorazione;
+        opt.textContent = entry.statoLavorazione;
+        stato.appendChild(opt);
+      }
+      stato.value = entry.statoLavorazione;
+    }
+  }
+  document.getElementById('f-data').value = entry.data || '';
+  document.getElementById('f-ora').value = entry.ora || '';
+  document.getElementById('f-operatore').value = entry.operatore || '';
+  document.getElementById('f-note').value = entry.note || '';
+  pendingPhotos = [...(entry.foto || [])];
+  if (typeof renderPhotoPreview === 'function') renderPhotoPreview();
+  switchTab('new');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  showEditBanner(entry);
+  toast(`✏️ Modifica registrazione ${formatDate(entry.data)} ${entry.ora || ''}`);
+}
+
+function showEditBanner(entry) {
+  let banner = document.getElementById('edit-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'edit-banner';
+    banner.style.cssText = 'background:#fdf2d0;color:#7a5a00;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px;';
+    const sect = document.getElementById('tab-new');
+    sect.insertBefore(banner, sect.firstChild);
+  }
+  banner.innerHTML = `<span>✏️ <strong>Stai modificando</strong> ${entry.opCode} del ${formatDate(entry.data)}${entry.sent ? ' (gia sincronizzata, verra ri-inviata)' : ''}</span><button onclick="cancelEditEntry()" style="background:none;border:1px solid #b07020;color:#7a5a00;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;">Annulla</button>`;
+}
+
+function hideEditBanner() {
+  const banner = document.getElementById('edit-banner');
+  if (banner) banner.remove();
+}
+
+function cancelEditEntry() {
+  editingEntryId = null;
+  hideEditBanner();
+  if (typeof resetForm === 'function') resetForm();
+  toast('Modifica annullata');
+}
+
+function viewPhoto(src) {
+  const w = window.open('', '_blank');
+  w.document.write(`<body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh;"><img src="${src}" style="max-width:100%;max-height:100%;"></body>`);
+}
+
+// ===== EXPORT =====
+function exportCSV() {
+  if (entries.length === 0) { toast('Niente da esportare'); return; }
+  const headers = ['Data','Ora','Cod. Op','Operazione','Gruppo','Vasche da scaricare','Vasche da caricare','Vino (codice)','Linea prodotto','Annata','Codice origine','Prodotti e materiali','Quantità totale (hl)','Operatore','Note','Num. foto'];
+  const formatVasche = (arr) => (arr || []).map(item => {
+    if (typeof item === 'string') return item;
+    return item.quantita ? `${item.vasca}: ${item.quantita} hl` : item.vasca;
+  }).join(' + ');
+  const rows = entries.map(e => [
+    e.data, e.ora || '', e.opCode, e.opDesc, e.opGruppo,
+    formatVasche(e.vaschePartenza),
+    formatVasche(e.vascheArrivo),
+    e.vino || '',
+    (() => { const l = LINEE_PRODOTTI.find(x => x.codice === e.vino); return l ? l.descrizione : (e.prodotto || ''); })(),
+    e.annata || '',
+    e.codiceOrigine || '',
+    (e.prodottiMateriali || []).map(p => {
+      if (p.dose && p.totale) return `${p.descrizione}: ${p.dose} ${p.unita} (${p.totale} ${totalUnit(p.unita)})`;
+      if (p.totale) return `${p.descrizione}: ${p.totale} ${p.unita.replace('/hl','')}`;
+      if (p.dose) return `${p.descrizione}: ${p.dose} ${p.unita}`;
+      if (p.quantita) return `${p.descrizione}: ${p.quantita} ${p.unita || ''}`;
+      return p.descrizione;
+    }).join(' + '),
+    e.qta || '', e.operatore || '',
+    (e.note || '').replace(/\n/g,' '), (e.foto || []).length
+  ]);
+  const csv = '\uFEFF' + [headers, ...rows].map(r =>
+    r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(';')
+  ).join('\n');
+  downloadFile(csv, `cantina-log-${todayStr()}.csv`, 'text/csv');
+  toast('📊 CSV scaricato');
+}
+function exportJSON() {
+  const json = JSON.stringify({ exported: new Date().toISOString(), entries }, null, 2);
+  downloadFile(json, `cantina-backup-${todayStr()}.json`, 'application/json');
+  toast('💾 Backup scaricato');
+}
+function importJSON() { document.getElementById('import-file').click(); }
+function handleImport(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!data.entries || !Array.isArray(data.entries)) throw 0;
+      if (!confirm(`Importare ${data.entries.length} registrazioni?`)) return;
+      entries = [...data.entries, ...entries];
+      persist(); renderList(); toast('✅ Importato');
+    } catch (err) { toast('⚠️ File non valido'); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+function clearAll() {
+  if (!confirm('Eliminare TUTTE le registrazioni?')) return;
+  if (!confirm('Sei sicuro? Fai prima un backup!')) return;
+  entries = []; persist(); renderList(); toast('Tutto cancellato');
+}
+function downloadFile(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+// ===== UTILS =====
+function parseHl(s) {
+  if (s === null || s === undefined) return 0;
+  const str = String(s).trim().replace(',', '.');
+  if (!str) return 0;
+  const n = parseFloat(str);
+  return isNaN(n) ? 0 : n;
+}
+function formatHl(n) {
+  if (n === null || n === undefined || isNaN(n)) return '';
+  return Number(n).toFixed(2).replace('.', ',');
+}
+
+function normalizeQta(input) {
+  let val = (input.value || '').trim();
+  if (!val) { input.value = ''; return ''; }
+  val = val.replace('.', ',');
+  const m = val.match(/^(\d+)(?:,(\d*))?$/);
+  if (!m) {
+    toast('⚠️ Quantità: usa solo cifre e virgola (es. 25,00)');
+    return null;
+  }
+  let decPart = m[2] || '';
+  if (decPart.length > 4) {
+    toast('⚠️ Massimo 4 cifre dopo la virgola');
+    return null;
+  }
+  if (decPart.length < 2) decPart = decPart.padEnd(2, '0');
+  const normalized = m[1] + ',' + decPart;
+  input.value = normalized;
+  return normalized;
+}
+
+function formatDate(d) { if (!d) return ''; const [y,m,day] = d.split('-'); return `${day}/${m}/${y.slice(2)}`; }
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(s) { return String(s).replace(/'/g, "\\'"); }
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+init();
+</script>
+
+</body>
+</html>
