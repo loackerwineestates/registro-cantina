@@ -2073,7 +2073,7 @@ function saveEntry() {
   const isCaricoOp = op.gruppo === 'CARICHI';
   const loadedVasche = isTravaso ? selectedArrivo : (isCaricoOp ? selectedPartenza : []);
   if (loadedVasche.length > 0) {
-    const { state: cantinaState } = computeCantinaState();
+    const { state: cantinaState } = computeCantinaState(editingEntryId);
     // Per i TRAVASI, considera che le vasche di partenza si svuotano contestualmente:
     // se carico in una vasca che era piena ma che ora sto anche scaricando dalla stessa partenza, ok.
     // Per semplicita controlliamo lo stato pre-operazione: se l'utente sta facendo TCV dalla stessa vasca, non e' un caso comune.
@@ -2468,7 +2468,8 @@ function checkEntryWarnings(opGruppo, vaschePartenza, vascheArrivo, vino, annata
   const moveArr   = isTravaso || isCarico;
   if (!movePart && !moveArr) return warnings;
 
-  const { state } = computeCantinaState();
+  // In modalita modifica, escludiamo la vecchia versione dell'entry dal replay
+  const { state } = computeCantinaState(editingEntryId);
 
   // Vasche di partenza: vuote / scarico eccessivo
   if (movePart && !isCarico) {
@@ -2499,7 +2500,7 @@ function checkEntryWarnings(opGruppo, vaschePartenza, vascheArrivo, vino, annata
   return warnings;
 }
 
-function computeCantinaState() {
+function computeCantinaState(skipEntryId) {
   const state = {};
   const warnings = [];
 
@@ -2510,7 +2511,12 @@ function computeCantinaState() {
     return String(a.createdAt || a.id).localeCompare(String(b.createdAt || b.id));
   });
 
+  const skipStr = skipEntryId != null ? String(skipEntryId) : null;
   for (const e of sorted) {
+    // Durante la modifica di una entry, escludila dal replay per evitare
+    // di contarla due volte (la vecchia versione e' ancora in entries quando
+    // la save chiama questa funzione per validare la nuova versione).
+    if (skipStr !== null && String(e.id) === skipStr) continue;
     const gruppo = e.opGruppo || '';
     const isTravaso = gruppo === 'TRAVASI' || gruppo === 'TRAVASI VENDEMMIA';
     const isScarico = gruppo === 'SCARICHI';
